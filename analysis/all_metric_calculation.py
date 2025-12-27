@@ -628,8 +628,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run QFlow evaluation.")
     # Required arguments
     parser.add_argument("--inference_dir", required=True, help="Directory containing inference results.")
-    parser.add_argument("--script_path", required=True, help="Absolute Path to the FoldSeek script.")
-    parser.add_argument("--dataset_dir", required=True, help="Directory containing the FoldSeek dataset.")
+    parser.add_argument("--script_path", default="/home/zichong_wang/ReQFlow/analysis/run_foldseek_parallel.sh", help="Absolute Path to the FoldSeek script.")
+    parser.add_argument("--dataset_dir", default="/home/zichong_wang/ReQFlow/foldseek/foldseek_db", help="Directory containing the FoldSeek dataset.")
 
     # Optional arguments with defaults
     parser.add_argument("--database", default="pdb", help="Database to use (e.g., pdb).")

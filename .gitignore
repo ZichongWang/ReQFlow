@@ -130,3 +130,9 @@ MNIST
 .DS_Store
 **/nohup
 *.out
+
+*.ckpt
+foldseek
+temp
+inference_outputs
+outputs

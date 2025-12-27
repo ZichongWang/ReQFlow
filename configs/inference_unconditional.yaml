@@ -9,7 +9,7 @@ inference:
   inference_subdir: ./inference_outputs/run_${now:%Y-%m-%d}_${now:%H-%M-%S} 
   pmpnn_dir: ./ProteinMPNN
   pt_hub_dir: ./.cache/torch/ # path to ESMfold
-  num_gpus: 4
+  num_gpus: 2
   for_rectify: False
 
   samples:

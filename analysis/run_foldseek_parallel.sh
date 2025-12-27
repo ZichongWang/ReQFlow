@@ -64,6 +64,7 @@ process_pdb() {
         --exhaustive-search \
         --max-seqs 10000000000 \
         --tmscore-threshold 0.0 \
+        --gpu 1\
         --format-output query,target,alntmscore,lddt,evalue
 
     if [ ! -f "$aln_file" ]; then
