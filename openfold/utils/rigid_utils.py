@@ -205,9 +205,7 @@ def quat_to_rot(quat: torch.Tensor) -> torch.Tensor:
     return torch.sum(quat, dim=(-3, -4))
 
 
-def rot_to_quat(
-    rot: torch.Tensor,
-):
+def rot_to_quat(rot: torch.Tensor) -> torch.Tensor:
     if(rot.shape[-2:] != (3, 3)):
         raise ValueError("Input rotation is incorrectly shaped")
 
@@ -284,6 +282,62 @@ def invert_quat(quat: torch.Tensor):
     quat_prime[..., 1:] *= -1
     inv = quat_prime / torch.sum(quat ** 2, dim=-1, keepdim=True)
     return inv
+
+
+
+
+def quat_conj(q: torch.Tensor) -> torch.Tensor:
+    # q: (...,4) in (w,x,y,z)
+    w, x, y, z = q.unbind(dim=-1)
+    return torch.stack([w, -x, -y, -z], dim=-1)
+
+def quat_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    # Hamilton product, both (...,4) in (w,x,y,z)
+    aw, ax, ay, az = a.unbind(dim=-1)
+    bw, bx, by, bz = b.unbind(dim=-1)
+    w = aw*bw - ax*bx - ay*by - az*bz
+    x = aw*bx + ax*bw + ay*bz - az*by
+    y = aw*by - ax*bz + ay*bw + az*bx
+    z = aw*bz + ax*by - ay*bx + az*bw
+    return torch.stack([w, x, y, z], dim=-1)
+
+def to_dual_quat(t: torch.Tensor, q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    t: (B, R, 3)
+    q: (B, R, 4)  (w,x,y,z), should represent rotation
+    return dq: (B, R, 8) = [q_r, q_d]
+    """
+    # normalize rotation quaternion
+    q_r = q / (q.norm(dim=-1, keepdim=True) + eps)
+
+    # pure translation quaternion q_t = (0, t)
+    zeros = torch.zeros_like(t[..., :1])
+    q_t = torch.cat([zeros, t], dim=-1)  # (B,R,4)
+
+    # q_d = 0.5 * (q_t ⊗ q_r)
+    q_d = 0.5 * quat_mul(q_t, q_r)
+
+    return torch.cat([q_r, q_d], dim=-1)
+
+def from_dual_quat(dq: torch.Tensor, eps: float = 1e-8):
+    """
+    dq: (B, R, 8) = [q_r, q_d]
+    return:
+      t: (B, R, 3)
+      q: (B, R, 4) (w,x,y,z)
+    """
+    q_r = dq[..., :4]
+    q_d = dq[..., 4:]
+
+    # ensure q_r is normalized (important for stable inversion)
+    q_r = q_r / (q_r.norm(dim=-1, keepdim=True) + eps)
+
+    # q_t = (2 q_d) ⊗ q_r^*
+    q_t = quat_mul(2.0 * q_d, quat_conj(q_r))  # (B,R,4)
+
+    t = q_t[..., 1:4]
+    q = q_r
+    return t, q
 
 
 class Rotation:

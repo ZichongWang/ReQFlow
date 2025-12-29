@@ -15,9 +15,9 @@ inference:
   samples:
 
     min_length: 100
-    max_length: 200
+    max_length: 500
     length_step: 50
-    samples_per_length: 50
+    samples_per_length: 100
     seq_per_sample: 8 # for ProteinMPNN
 
 

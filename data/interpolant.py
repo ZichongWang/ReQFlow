@@ -263,12 +263,12 @@ class Interpolant:
         # Set-up initial prior samples
         if trans_0 is None:
             trans_0 = _centered_gaussian(
-                num_batch, num_res, self._device) * du.NM_TO_ANG_SCALE
+                num_batch, num_res, self._device) * du.NM_TO_ANG_SCALE  # torch.Tensor(batch, res, 3)
         
         if rotmats_0 is None:
             #* For uniform sampling
             rotmats_0 = _uniform_so3(num_batch, num_res, self._device)
-            rotquats_0 = rot_to_quat(rotmats_0)
+            rotquats_0 = rot_to_quat(rotmats_0) # torch.Tensor(batch, res, 4)
             #* For IGSO3 sampling
             # noisy_rotmats = self.igso3.sample(
             #     torch.tensor([1.5]),

@@ -1,0 +1,320 @@
+\documentclass[a4paper,11pt]{article}
+
+% Packages for math, formatting, and code
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}              % For bold math symbols (\bm)
+\usepackage{geometry}        % Page margins
+\usepackage{listings}        % For code snippets
+\usepackage{xcolor}          % For code highlighting
+\usepackage[hidelinks]{hyperref} % For hyperlinks (hidelinks removes red boxes)
+\usepackage{algorithm}    % For the floating algorithm environment
+\usepackage{algorithmic}
+% Geometry settings
+\geometry{left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+
+% Code listing style
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.96,0.96,0.95}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+
+\lstset{style=mystyle}
+
+% Title
+\title{Rigid Body Interpolation via Dual Quaternions for Flow Matching}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This document details the mathematical representations and interpolation strategies for rigid bodies, specifically focusing on the application of Dual Quaternions (DQ) in the inference stage of Flow Matching models. We adopt the convention of global translation vectors $\bm{x}$ and rotation quaternions $\bm{q}$.
+
+\section{\texorpdfstring{Quaternions and Exponential SLERP}{Quaternions and Exponential SLERP}}
+
+\subsection{Representation}
+A unit quaternion $\bm{q} \in \mathbb{H}_1$ represents a rotation in 3D space. We use the \textbf{scalar-first} convention:
+\begin{equation}
+    \bm{q} = (w, x, y, z) = w + x\mathbf{i} + y\mathbf{j} + z\mathbf{k}
+\end{equation}
+The identity rotation is $\bm{q}_{id} = (1, 0, 0, 0)$. The inverse of a unit quaternion is its conjugate $\bm{q}^* = (w, -x, -y, -z)$.
+
+\subsection{Exponential Map and Logarithm}
+To perform interpolation correctly on the $SO(3)$ manifold, we utilize the exponential and logarithmic maps. For a quaternion $\bm{q} = (w, \bm{v})$, the logarithm map to the tangent space $\mathfrak{so}(3)$ (represented as a pure quaternion vector) is:
+\begin{equation}
+    \log(\bm{q}) = \begin{cases} 
+        (0, \mathbf{0}) & \text{if } \theta = 0 \\
+        \left(0, \frac{\theta}{\sin(\theta)}\bm{v} \right) & \text{if } \theta \neq 0 
+    \end{cases}, \quad \text{where } \theta = \arccos(w)
+\end{equation}
+The exponential map from a pure quaternion $\bm{\omega} = (0, \bm{\theta})$ back to the unit sphere is:
+\begin{equation}
+    \exp(\bm{\omega}) = \left( \cos(\|\bm{\theta}\|), \sin(\|\bm{\theta}\|) \frac{\bm{\theta}}{\|\bm{\theta}\|} \right)
+\end{equation}
+
+\subsection{\texorpdfstring{SLERP in Exponential Format}{SLERP in Exponential Format}}
+Standard Spherical Linear Interpolation (SLERP) between $\bm{q}_0$ and $\bm{q}_1$ with $t \in [0, 1]$ is formally defined using the exponential map of the relative rotation. Following Sola (2017), the trajectory is:
+\begin{equation}
+    \text{SLERP}(\bm{q}_0, \bm{q}_1, t) = \bm{q}_0 \otimes \exp\left( t \cdot \log(\bm{q}_0^* \otimes \bm{q}_1) \right)
+\end{equation}
+This formulation ensures the interpolation follows the geodesic (shortest path) with constant angular velocity.
+
+\section{\texorpdfstring{Dual Quaternions}{Dual Quaternions}}
+
+\subsection{Representation}
+A dual quaternion $\hat{\bm{q}}$ consists of a real part $\bm{q}_r$ and a dual part $\bm{q}_d$, separated by the dual unit $\epsilon$ (where $\epsilon^2 = 0$):
+\begin{equation}
+    \hat{\bm{q}} = \bm{q}_r + \epsilon \bm{q}_d
+\end{equation}
+For rigid body transformations $SE(3)$, we use \textit{unit dual quaternions}, satisfying the conditions $\|\bm{q}_r\| = 1$ and $\bm{q}_r \cdot \bm{q}_d = 0$.
+
+\subsection{\texorpdfstring{Conversion: $(\bm{x}, \bm{q}) \to \hat{\bm{q}}$}{Conversion}}
+We define the conversion for a \textbf{Global Translation} $\bm{x}$ followed by rotation $\bm{q}$ (or rotation then translation in global frame). 
+Given a translation vector $\bm{x}$ and rotation quaternion $\bm{q}$, the dual quaternion is:
+\begin{equation}
+    \begin{aligned}
+        \bm{q}_r &= \bm{q} \\
+        \bm{q}_d &= \frac{1}{2} \bm{x}_{quat} \otimes \bm{q}_r
+    \end{aligned}
+\end{equation}
+where $\bm{x}_{quat} = (0, x, y, z)$ is the pure quaternion formed from the translation vector.
+\footnote{Note: Some literature (e.g., Kenwright) defines $\bm{q}_d = \frac{1}{2}\bm{q}_r \bm{x}_{quat}$. That convention corresponds to translation defined in the \textit{local} frame of the rotation. For Flow Matching in global coordinates, the form $\frac{1}{2}\bm{x}_{quat}\bm{q}_r$ is required.}
+
+\subsection{\texorpdfstring{Inverse Conversion: $\hat{\bm{q}} \to (\bm{x}, \bm{q})$}{Inverse Conversion}}
+To recover the translation $\bm{x}$ and rotation $\bm{q}$ from $\hat{\bm{q}}$:
+\begin{equation}
+    \begin{aligned}
+        \bm{q} &= \frac{\bm{q}_r}{\|\bm{q}_r\|} \quad \text{(Normalization for stability)}\\
+        \bm{x}_{quat} &= 2 \bm{q}_d \otimes \bm{q}_r^*
+    \end{aligned}
+\end{equation}
+The vector part of $\bm{x}_{quat}$ yields the translation $\bm{x}$.
+
+
+\paragraph{Batch shapes (common in practice).}
+If $\bm x$ has shape $(B,R,3)$ and $\bm q$ has shape $(B,R,4)$, then $\hat{\bm q}$ can be stored as an 8D tensor of shape $(B,R,8)$ via concatenation $[\bm q_r,\bm q_d]$.
+
+\subsection{Dual Quaternion Algebra and Computation}
+
+To implement algorithms such as ScLERP and to maintain constraints on the SE(3) manifold, we define the fundamental algebraic operations for dual quaternions. Let $\hat{\bm{q}} = \bm{q}_r + \epsilon \bm{q}_d$ and $\hat{\bm{p}} = \bm{p}_r + \epsilon \bm{p}_d$ be two dual quaternions.
+
+\paragraph{Dot Product}
+The dot product is defined as the standard Euclidean inner product in $\mathbb{R}^8$. This is primarily used to check for antipodal alignment (i.e., $\text{sgn}(\hat{\bm{q}} \cdot \hat{\bm{p}})$):
+\begin{equation}
+    \hat{\bm{q}} \cdot \hat{\bm{p}} = \bm{q}_r \cdot \bm{p}_r + \bm{q}_d \cdot \bm{p}_d
+\end{equation}
+
+\paragraph{Hamilton Product}
+Multiplication is distributive and follows the property $\epsilon^2 = 0$. The product $\hat{\bm{q}} \otimes \hat{\bm{p}}$ is:
+\begin{equation}
+    \hat{\bm{q}} \otimes \hat{\bm{p}} = (\bm{q}_r \otimes \bm{p}_r) + \epsilon (\bm{q}_r \otimes \bm{p}_d + \bm{q}_d \otimes \bm{p}_r)
+\end{equation}
+where $\otimes$ denotes the standard quaternion Hamilton product.
+
+\paragraph{Norm}
+The magnitude of a dual quaternion is technically a dual number. However, for the purpose of projecting values back onto the Unit Dual Quaternion manifold (renormalization), we are concerned with the Euclidean norm of the real part (rotation) and the orthogonality of the dual part. A general normalization is applied as:
+\begin{equation}
+    \|\hat{\bm{q}}\| = \|\bm{q}_r\|
+\end{equation}
+A valid unit dual quaternion must satisfy $\|\hat{\bm{q}}\| = 1$ and the orthogonality constraint $\bm{q}_r \cdot \bm{q}_d = 0$.
+
+\paragraph{Logarithm and Exponential}
+These operations map between the Lie group SE(3) (represented by unit dual quaternions) and its Lie algebra $\mathfrak{se}(3)$ (represented by pure dual quaternions, or "twists").
+
+For a unit dual quaternion $\hat{\bm{q}}$, let $\phi = \arccos(w_r)$ be the half-angle of rotation, and $\hat{\bm{n}}$ be the dual screw axis. The logarithm is:
+\begin{equation}
+    \log(\hat{\bm{q}}) = \frac{1}{2} \hat{\bm{\theta}} = \frac{1}{2} (\bm{\theta}_r + \epsilon \bm{\theta}_d)
+\end{equation}
+where $\hat{\bm{\theta}}$ is the dual vector representing the screw parameters (axis, angle, and pitch). In practice, this can be computed using the quaternion logarithm $\log \bm{q}_r$ and simple vector algebra for the dual part.
+
+The exponential map takes a pure dual quaternion $\hat{\bm{v}} = \bm{v}_r + \epsilon \bm{v}_d$ (a twist) and maps it to a unit dual quaternion:
+\begin{equation}
+    \exp(\hat{\bm{v}}) = \left( \cos(\|\hat{\bm{v}}\|), \sin(\|\hat{\bm{v}}\|) \frac{\hat{\bm{v}}}{\|\hat{\bm{v}}\|} \right)
+\end{equation}
+Note that trigonometric functions $\cos$ and $\sin$ here are defined over dual numbers (e.g., $\sin(a+\epsilon b) = \sin a + \epsilon b \cos a$).
+
+\paragraph{Power Function ($t$)}
+The power operation $\hat{\bm{q}}^t$, fundamental to ScLERP, allows for interpolation along the screw motion path. It is defined via the exponential and logarithmic maps:
+\begin{equation}
+    \hat{\bm{q}}^t = \exp( t \cdot \log(\hat{\bm{q}}) )
+\end{equation}
+This scales the screw angle and translation distance linearly by the factor $t$.
+
+\section{Inference via Overshoot-Backtrack Dual Interpolation}
+
+Standard ReQFlow inference generates translations and rotations via independent (decoupled) Euler integration steps. While efficient, this overlooks the natural screw motion coupling inherent in rigid body dynamics. To incorporate this geometric prior during inference, we propose a \textbf{Overshoot-Backtrack} strategy.
+
+This predictor-corrector scheme first uses the decoupled flow to probe the vector field ("Overshoot"), and then relaxes the trajectory onto a coupled manifold path using Dual Quaternion interpolation ("Backtrack").
+
+\subsection{The Overshoot Step (Predictor)}
+Let the current state at time $t$ be $T_t = (\bm{x}_t, \bm{q}_t)$. We aim to advance to $t + \Delta t$. First, we compute a temporary \textit{overshoot} state, $T_{\text{over}}$, by stepping forward with a step size of $2\Delta t$ using the standard ReQFlow decoupled solver.
+
+Using the predicted translation velocity $\bm{v}_{\theta,t}$ and angular velocity $\bm{\omega}_{\theta,t}$ (Eq. 10), and applying the exponential step scheduler derived in Eq. (15):
+\begin{equation}
+    \bm{x}_{\text{over}} = \bm{x}_t + \bm{v}_{\theta,t} \cdot (2\Delta t),
+\end{equation}
+\begin{equation}
+    \bm{q}_{\text{over}} = \bm{q}_t \otimes \exp\left( \frac{1}{2} (2\Delta t) \cdot \gamma e^{-\gamma t} \bm{\omega}_{\theta,t} \right).
+\end{equation}
+Here, $T_{\text{over}} = (\bm{x}_{\text{over}}, \bm{q}_{\text{over}})$ represents a linearized projection of the trajectory at $t + 2\Delta t$.
+
+\subsection{The Backtrack Step (Corrector)}
+To determine the final state at $t + \Delta t$, we interpolate backwards from $T_{\text{over}}$ to $T_t$. By converting these states into Unit Dual Quaternions (UDQ), we can employ coupled interpolation methods that respect the manifold structure of SE(3).
+
+\textbf{1. Conversion to Dual Quaternions.}
+We convert the current and overshoot states into dual quaternions $\hat{\bm{q}}_t$ and $\hat{\bm{q}}_{\text{over}}$. Adopting the global translation convention:
+\begin{equation}
+    \hat{\bm{q}} = \bm{q}_r + \epsilon \left( \frac{1}{2} \bm{x}_{\text{quat}} \otimes \bm{q}_r \right),
+\end{equation}
+where $\bm{x}_{\text{quat}} = (0, \bm{x})$.
+
+\textbf{2. Coupled Interpolation.}
+We compute the next state $\hat{\bm{q}}_{t+\Delta t}$ by interpolating between $\hat{\bm{q}}_t$ and $\hat{\bm{q}}_{\text{over}}$ with a factor $\lambda \approx 0.5$.
+\begin{equation}
+    \hat{\bm{q}}_{t+\Delta t} = \text{Interp}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}; \lambda).
+\end{equation}
+We propose three variants for the $\text{Interp}(\cdot)$ function:
+
+\begin{itemize}
+    \item \textbf{Variant A: Dual Linear Blending (DLB).} 
+    Efficient and numerically stable. It approximates the screw motion by linearly blending the dual components and renormalizing:
+    \begin{equation}
+        \hat{\bm{q}}_{\text{dlb}} = \frac{(1-\lambda)\hat{\bm{q}}_t + \lambda \cdot \text{sgn}(\hat{\bm{q}}_t \cdot \hat{\bm{q}}_{\text{over}}) \hat{\bm{q}}_{\text{over}}}{\|(1-\lambda)\hat{\bm{q}}_t + \lambda \cdot \text{sgn}(\hat{\bm{q}}_t \cdot \hat{\bm{q}}_{\text{over}}) \hat{\bm{q}}_{\text{over}}\|}.
+    \end{equation}
+    
+    \item \textbf{Variant B: Screw Linear Interpolation (ScLERP).}
+    The theoretically exact geodesic on SE(3). It ensures constant screw axis velocities, ideal for high-precision trajectory requirements:
+    \begin{equation}
+        \hat{\bm{q}}_{\text{sclerp}} = \hat{\bm{q}}_t \otimes \exp\left( \lambda \cdot \log(\hat{\bm{q}}_t^* \otimes \hat{\bm{q}}_{\text{over}}) \right).
+    \end{equation}
+    
+    \item \textbf{Variant C: KenLERP (Hybrid Control).}
+    Allows for regulating the degree of coupling. It blends the result of a decoupled step (standard Euler) and a coupled step (DLB/ScLERP). This is particularly useful for \textit{diversity injection}. By sampling a mixing parameter $\beta$, the trajectory can fluctuate between the decoupled training distribution and the physically coupled geometric prior.
+\end{itemize}
+
+\textbf{3. State Update.}
+Finally, $\hat{\bm{q}}_{t+\Delta t}$ is converted back to $(\bm{x}_{t+\Delta t}, \bm{q}_{t+\Delta t})$ to proceed to the next inference step.
+
+\begin{algorithm}[h]
+\caption{Overshoot-Backtrack Inference with Generic Interpolation}
+\label{alg:overshoot_generic}
+\begin{algorithmic}[1]
+\REQUIRE Model $\mathcal{M}_\theta$, noise $T_0$, steps $L$, accel. $\gamma$, strategy $\in \{\text{DLB}, \text{ScLERP}\}$.
+\STATE Initialize $t = 0, \Delta t = \frac{1}{L}$.
+\FOR{step $= 1$ to $L$}
+    \STATE \textit{// 1. Decoupled Overshoot (Predictor)}
+    \STATE Predict $\bm{v}_{\theta,t}, \bm{\omega}_{\theta,t}$ from $\mathcal{M}_\theta(T_t, t)$.
+    \STATE $\bm{x}_{\text{over}} \leftarrow \bm{x}_t + \bm{v}_{\theta,t} \cdot (2\Delta t)$
+    \STATE $\bm{q}_{\text{over}} \leftarrow \bm{q}_t \otimes \exp\left(\Delta t \cdot \gamma e^{-\gamma t} \bm{\omega}_{\theta,t}\right)$
+    
+    \STATE \textit{// 2. Coupled Backtrack (Corrector)}
+    \STATE $\hat{\bm{q}}_t \leftarrow \text{ToDual}(\bm{x}_t, \bm{q}_t)$
+    \STATE $\hat{\bm{q}}_{\text{over}} \leftarrow \text{ToDual}(\bm{x}_{\text{over}}, \bm{q}_{\text{over}})$
+    
+    \STATE Sample $\lambda \sim \mathcal{N}(0.5, \sigma^2)$ \COMMENT{Stochastic diversity}
+    
+    \IF{strategy == DLB}
+        \STATE $\hat{\bm{q}}_{\text{next}} \leftarrow \text{DLB}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}, \lambda)$
+    \ELSIF{strategy == ScLERP}
+        \STATE $\hat{\bm{q}}_{\text{next}} \leftarrow \text{ScLERP}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}, \lambda)$
+    \ENDIF
+    
+    \STATE $\bm{x}_{t+\Delta t}, \bm{q}_{t+\Delta t} \leftarrow \text{FromDual}(\hat{\bm{q}}_{\text{next}})$
+    \STATE $t \leftarrow t + \Delta t$
+\ENDFOR
+\RETURN Generated backbone frame $T_1$
+\end{algorithmic}
+\end{algorithm}
+
+\newpage
+\section{PyTorch Pseudo-code}
+
+\begin{lstlisting}[language=Python, caption=Dual Quaternion Implementation]
+import torch
+
+def quat_mul(a, b):
+    """ Hamilton product for scalar-first quaternions (w, x, y, z) """
+    aw, ax, ay, az = a.unbind(-1)
+    bw, bx, by, bz = b.unbind(-1)
+    w = aw*bw - ax*bx - ay*by - az*bz
+    x = aw*bx + ax*bw + ay*bz - az*by
+    y = aw*by - ax*bz + ay*bw + az*bx
+    z = aw*bz + ax*by - ay*bx + az*bw
+    return torch.stack([w, x, y, z], dim=-1)
+
+def quat_conj(q):
+    w, x, y, z = q.unbind(-1)
+    return torch.stack([w, -x, -y, -z], dim=-1)
+
+def to_dual_quat(t, q):
+    """
+    Convert Global Translation t and Rotation q to Unit Dual Quaternion.
+    q_d = 0.5 * t_quat * q_r
+    """
+    # Normalize rotation
+    q_r = q / (q.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # Create pure translation quaternion (0, t)
+    zeros = torch.zeros_like(t[..., :1])
+    q_t = torch.cat([zeros, t], dim=-1)
+    
+    # Global translation definition
+    q_d = 0.5 * quat_mul(q_t, q_r)
+    
+    return torch.cat([q_r, q_d], dim=-1)
+
+def from_dual_quat(dq):
+    """ Recover t and q from Unit Dual Quaternion """
+    q_r = dq[..., :4]
+    q_d = dq[..., 4:]
+    
+    # Re-normalize rotation
+    q_r = q_r / (q_r.norm(dim=-1, keepdim=True) + 1e-8)
+    
+    # t_quat = 2 * q_d * q_r_conj
+    q_t = quat_mul(2.0 * q_d, quat_conj(q_r))
+    
+    return q_t[..., 1:], q_r
+
+def dlb_interpolate(dq1, dq2, t):
+    """ Dual Linear Blending (Approximate ScLERP) """
+    # 1. Handle antipodal ambiguity
+    dot = torch.sum(dq1 * dq2, dim=-1, keepdim=True)
+    sign = torch.sign(dot)
+    sign[sign == 0] = 1 # Handle zero case
+    dq2 = dq2 * sign
+    
+    # 2. Linear Blend
+    dq_blend = (1 - t) * dq1 + t * dq2
+    
+    # 3. Renormalize (Unit Dual Quaternion Constraint)
+    # The magnitude is determined by the real part norm
+    q_r_blend = dq_blend[..., :4]
+    norm = torch.norm(q_r_blend, dim=-1, keepdim=True) + 1e-8
+    
+    return dq_blend / norm
+\end{lstlisting}
+
+\end{document}
