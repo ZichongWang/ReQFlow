@@ -25,6 +25,10 @@ inference:
     sampling:
       num_timesteps: 500
       do_sde: False
+      overshoot: False
+      overshoot_strategy: DLB  # DLB, ScLERP, KenLERP
+      KenLERP_beta: 0.5
+
     rots:
       sample_schedule: exp
 

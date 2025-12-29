@@ -1564,3 +1564,394 @@ def calc_quat_wt_qt_q1(qt: torch.Tensor, q1: torch.Tensor, epsilon: float = 1e-6
     wt = u * phi_t[..., None]  # Shape: [B, N, 3]
     
     return wt
+
+
+
+# ==========================================
+# Dual Quaternion Utilities
+# Designed to work with [B, N, ...] shapes
+# Quaternion format: (w, x, y, z)
+# Dual Quaternion format: [qr, qd] concatenated -> (w_r, x_r, y_r, z_r, w_d, x_d, y_d, z_d)
+# ==========================================
+
+def dq_split(dq):
+    """
+    Split a dual quaternion into real (rotational) and dual (translational) parts.
+    
+    Args:
+    - dq: [B, N, 8], input dual quaternions.
+    
+    Returns:
+    - qr: [B, N, 4], real part quaternion (w, x, y, z).
+    - qd: [B, N, 4], dual part quaternion (w, x, y, z).
+    """
+    return dq[..., :4], dq[..., 4:]
+
+def dq_join(qr, qd):
+    """
+    Concatenate real and dual parts into a dual quaternion.
+    
+    Args:
+    - qr: [B, N, 4], real part quaternion.
+    - qd: [B, N, 4], dual part quaternion.
+    
+    Returns:
+    - dq: [B, N, 8], combined dual quaternion.
+    """
+    return torch.cat([qr, qd], dim=-1)
+
+def dq_conjugate(dq):
+    """
+    Compute the conjugate of a dual quaternion.
+    dq* = qr* + epsilon * qd*
+    
+    Args:
+    - dq: [B, N, 8], input dual quaternions.
+    
+    Returns:
+    - dq_conj: [B, N, 8], conjugated dual quaternions.
+    """
+    qr, qd = dq_split(dq)
+    # Re-use your existing quaternion_conjugate_batch
+    return dq_join(quaternion_conjugate_batch(qr), quaternion_conjugate_batch(qd))
+
+def dq_mul_batch(dq1, dq2):
+    """
+    Multiply two batches of dual quaternions.
+    (qr1 + e*qd1) * (qr2 + e*qd2) = (qr1*qr2) + e*(qr1*qd2 + qd1*qr2)
+    
+    Args:
+    - dq1: [B, N, 8], first batch.
+    - dq2: [B, N, 8], second batch.
+    
+    Returns:
+    - dq_mult: [B, N, 8], product.
+    """
+    qr1, qd1 = dq_split(dq1)
+    qr2, qd2 = dq_split(dq2)
+    
+    # Real part = qr1 * qr2
+    qr_out = quaternion_mul_batch(qr1, qr2)
+    
+    # Dual part = qr1 * qd2 + qd1 * qr2
+    qd_out = quaternion_mul_batch(qr1, qd2) + quaternion_mul_batch(qd1, qr2)
+    
+    return dq_join(qr_out, qd_out)
+
+def dq_normalize(dq, eps=1e-8):
+    """
+    Normalize a dual quaternion to be a Unit Dual Quaternion.
+    Norm condition: ||qr|| = 1 and qr · qd = 0.
+    
+    Args:
+    - dq: [B, N, 8], input dual quaternions.
+    - eps: float, small value for stability.
+    
+    Returns:
+    - dq_norm: [B, N, 8], normalized dual quaternions.
+    """
+    qr, qd = dq_split(dq)
+    
+    # 1. Normalize real part (rotation)
+    n = qr.norm(dim=-1, keepdim=True) + eps
+    qr_norm = qr / n
+    
+    # 2. Scale dual part by the same factor
+    qd_scaled = qd / n
+    
+    # 3. Enforce orthogonality (remove component of qd parallel to qr)
+    # dot(qr, qd) should be 0 for valid rigid body transform
+    dot = torch.sum(qr_norm * qd_scaled, dim=-1, keepdim=True)
+    qd_ortho = qd_scaled - qr_norm * dot
+    
+    return dq_join(qr_norm, qd_ortho)
+
+def trans_rot_to_dq(t, q, eps=1e-8):
+    """
+    Convert Global Translation t and Rotation q to a Unit Dual Quaternion.
+    Note: Assumes Global Translation convention (v' = R v + t).
+    Formula: dq = q + epsilon * (0.5 * t * q)
+    
+    Args:
+    - t: [B, N, 3], translation vectors.
+    - q: [B, N, 4], rotation quaternions (w, x, y, z).
+    - eps: float, stability term.
+    
+    Returns:
+    - dq: [B, N, 8], unit dual quaternions.
+    """
+    # Ensure q is normalized
+    q = q / (q.norm(dim=-1, keepdim=True) + eps)
+    
+    # Convert translation vector t to pure quaternion (0, t)
+    # Shape: [B, N, 4] -> (0, tx, ty, tz)
+    zeros = torch.zeros_like(t[..., :1])
+    q_t = torch.cat([zeros, t], dim=-1)
+    
+    # Calculate dual part: qd = 0.5 * q_t * q
+    # Note: Your code uses quaternion_mul_batch
+    qd = 0.5 * quaternion_mul_batch(q_t, q)
+    
+    return dq_join(q, qd)
+
+def dq_to_trans_rot(dq, eps=1e-8):
+    """
+    Convert Unit Dual Quaternion back to Translation and Rotation.
+    
+    Args:
+    - dq: [B, N, 8], input dual quaternions.
+    - eps: float, stability term.
+    
+    Returns:
+    - t: [B, N, 3], translation vectors.
+    - q: [B, N, 4], normalized rotation quaternions.
+    """
+    dq = dq_normalize(dq, eps)
+    qr, qd = dq_split(dq)
+    
+    # Recover translation: t_quat = 2 * qd * qr_conj
+    qr_conj = quaternion_conjugate_batch(qr)
+    q_t = quaternion_mul_batch(2.0 * qd, qr_conj)
+    
+    # Extract vector part (x, y, z)
+    t = q_t[..., 1:] 
+    
+    return t, qr
+
+def dq_pow_batch(dq, t_frac, eps=1e-8):
+    """
+    Compute dq^t for a batch of unit dual quaternions.
+    This is the core component for ScLERP: dq^t = exp(t * log(dq)).
+    It scales the screw motion parameters (angle and pitch) by t_frac.
+    
+    Args:
+    - dq: [B, N, 8], unit dual quaternions.
+    - t_frac: [B, N] or [B, N, 1], interpolation factor.
+    - eps: float, stability term.
+    
+    Returns:
+    - dq_pow: [B, N, 8], result of dq raised to power t_frac.
+    """
+    qr, qd = dq_split(dq)
+    
+    # Ensure t_frac has correct broadcasting shape [B, N, 1]
+    if t_frac.dim() == qr.dim() - 1:
+        t_frac = t_frac.unsqueeze(-1)
+        
+    # 1. Canonicalize sign of w (shortest path logic, w >= 0)
+    sign = torch.sign(qr[..., :1])
+    sign[sign == 0] = 1
+    qr = qr * sign
+    qd = qd * sign
+    
+    # 2. Extract Rotation Parameters (Angle/Axis)
+    w = qr[..., :1]              # cos(theta/2)
+    v = qr[..., 1:]              # u * sin(theta/2)
+    v_norm = v.norm(dim=-1, keepdim=True)
+    
+    # Half angle phi/2
+    half_phi = torch.atan2(v_norm, w.clamp_min(eps))
+    
+    # Screw axis direction u (normalized)
+    u = v / (v_norm + eps)
+    
+    # 3. Extract Translation Parameters (Pitch d/2 and Moment M)
+    # The scalar part of qd is related to pitch: qd_w = - (d/2) * sin(theta/2)
+    # So: beta = d/2 = -qd_w / sin(theta/2)
+    beta = -qd[..., :1] / (v_norm + eps)
+    
+    # The vector part of qd contains the Moment M
+    # qd_vec = beta * cos(theta/2) * u + sin(theta/2) * M
+    qd_vec = qd[..., 1:]
+    sin_phi = v_norm
+    cos_phi = w
+    
+    # Solve for M (Moment vector)
+    M = (qd_vec - beta * cos_phi * u) / (sin_phi + eps)
+    
+    # 4. Scale parameters by t
+    half_phi_new = half_phi * t_frac
+    beta_new = beta * t_frac
+    
+    sin_new = torch.sin(half_phi_new)
+    cos_new = torch.cos(half_phi_new)
+    
+    # 5. Reconstruct Dual Quaternion
+    # Real part: [cos(new), u * sin(new)]
+    qr_new = torch.cat([cos_new, u * sin_new], dim=-1)
+    
+    # Dual part scalar: -beta_new * sin(new)
+    qd_scalar_new = -beta_new * sin_new
+    
+    # Dual part vector: beta_new * cos(new) * u + sin(new) * M
+    qd_vec_new = beta_new * cos_new * u + sin_new * M
+    
+    qd_new = torch.cat([qd_scalar_new, qd_vec_new], dim=-1)
+    
+    dq_res = dq_join(qr_new, qd_new)
+    
+    # 6. Handle Singularity (Small Angles)
+    # When theta -> 0, the motion is pure translation.
+    # In this case, qd = 0.5 * t_vec * 1. 
+    # So dq^t should simply scale qd by t.
+    small_angle_mask = (v_norm < 1e-6).expand_as(dq_res)
+    
+    # Identity rotation quaternion
+    id_qr = torch.zeros_like(qr)
+    id_qr[..., 0] = 1.0
+    
+    # Pure translation scaling: (1, 0) + e * (qd * t)
+    dq_small = dq_join(id_qr, qd * t_frac)
+    
+    return torch.where(small_angle_mask, dq_small, dq_res)
+
+def sclerp_batch(dqA, dqB, t, eps=1e-8):
+    """
+    Screw Linear Interpolation (ScLERP) for batch.
+    Computes: dq(t) = dqA * (dqA* * dqB)^t
+    
+    Args:
+    - dqA: [B, N, 8], start pose.
+    - dqB: [B, N, 8], end pose.
+    - t: [B, N], interpolation factor.
+    
+    Returns:
+    - dq_t: [B, N, 8], interpolated pose.
+    """
+    # Normalize inputs
+    dqA = dq_normalize(dqA, eps)
+    dqB = dq_normalize(dqB, eps)
+    
+    # Sign alignment (check dot product of real parts)
+    rA, _ = dq_split(dqA)
+    rB, _ = dq_split(dqB)
+    dot = torch.sum(rA * rB, dim=-1, keepdim=True)
+    mask = dot < 0
+    
+    # Flip dqB if needed
+    dqB_fixed = dqB.clone()
+    dqB_fixed[mask.expand_as(dqB)] = -dqB_fixed[mask.expand_as(dqB)]
+    
+    # Compute relative motion: dq_rel = dqA* * dqB
+    dq_rel = dq_mul_batch(dq_conjugate(dqA), dqB_fixed)
+    
+    # Power of relative motion
+    dq_rel_t = dq_pow_batch(dq_rel, t, eps)
+    
+    # Apply to start pose: dqA * dq_rel^t
+    return dq_mul_batch(dqA, dq_rel_t)
+
+def dlb_batch(dqA, dqB, t, eps=1e-8):
+    """
+    Dual Linear Blending (DLB) for batch.
+    Faster approximation of ScLERP.
+    
+    Args:
+    - dqA: [B, N, 8], start pose.
+    - dqB: [B, N, 8], end pose.
+    - t: [B, N], interpolation factor.
+    
+    Returns:
+    - dq_t: [B, N, 8], interpolated pose.
+    """
+    # Sign alignment
+    rA, _ = dq_split(dqA)
+    rB, _ = dq_split(dqB)
+    dot = torch.sum(rA * rB, dim=-1, keepdim=True)
+    mask = dot < 0
+    
+    dqB_fixed = dqB.clone()
+    dqB_fixed[mask.expand_as(dqB)] = -dqB_fixed[mask.expand_as(dqB)]
+    
+    # Linear Blend
+    if t.dim() == dqA.dim() - 1:
+        t = t.unsqueeze(-1) # [B, N, 1]
+        
+    mix = (1 - t) * dqA + t * dqB_fixed
+    
+    # Normalize result
+    return dq_normalize(mix, eps)
+
+def seplerp_batch(dqA, dqB, t, eps=1e-8):
+    """
+    Separated LERP (SepLERP).
+    Interpolates Translation linearly and Rotation via SLERP.
+    Decoupled behavior (standard in training).
+    
+    Args:
+    - dqA: [B, N, 8]
+    - dqB: [B, N, 8]
+    - t: [B, N]
+    
+    Returns:
+    - dq_t: [B, N, 8]
+    """
+    # Convert to T/R
+    xA, qA = dq_to_trans_rot(dqA, eps)
+    xB, qB = dq_to_trans_rot(dqB, eps)
+    
+    # Interpolate Translation Linearly
+    if t.dim() == xA.dim() - 1:
+        t_uns = t.unsqueeze(-1)
+    else:
+        t_uns = t
+        
+    x_t = (1 - t_uns) * xA + t_uns * xB
+    
+    # Interpolate Rotation via SLERP (using your existing function)
+    # quaternion_slerp_exp expects [B, N, 4] and t [B, N]
+    q_t = quaternion_slerp_exp(t, qB, qA) # Note: your slerp func arg order is (t, q1, q0) -> (t, end, start) or vice versa?
+    # Checking your slerp docstring: "q0 start, q1 end".
+    # So call it as: quaternion_slerp_exp(t, q1=dqB, q0=dqA) => NO, your doc signature is (t, q1, q0) but q0 is start?
+    # Let's double check your provided slerp code logic:
+    # "q_rel = quaternion_mul_batch(q0_conj, q1_adjusted)" -> This means q0 is start, q1 is end.
+    # Argument signature provided: quaternion_slerp_exp(t, q1, q0).
+    # This suggests q1 is passed as first quaternion arg, q0 as second?
+    # Wait, usually (t, start, end). 
+    # Your definition: quaternion_slerp_exp(t, q1, q0). 
+    # Inside: q0 is used as base for q_rel. So q0 is indeed start.
+    # So if I call it, I should pass q1=End, q0=Start.
+    
+    q_t = quaternion_slerp_exp(t, q1=qB, q0=qA)
+    
+    return trans_rot_to_dq(x_t, q_t, eps)
+
+def kenlerp_batch(dqA, dqB, t, beta, eps=1e-8):
+    """
+    KenLERP: Hybrid interpolation controlling coupling.
+    Blends between SepLERP (Decoupled, beta=0) and ScLERP (Coupled, beta=1).
+    
+    Args:
+    - dqA, dqB: [B, N, 8]
+    - t: [B, N], interpolation time (0->1).
+    - beta: [B, N] or float, mixing factor. 
+      beta=0 -> SepLERP (Decoupled).
+      beta=1 -> ScLERP (Coupled).
+    
+    Returns:
+    - dq_t: [B, N, 8]
+    """
+    # 1. Compute both paths
+    dq_coupled = dlb_batch(dqA, dqB, t, eps) # Using DLB as proxy for ScLERP for speed
+    dq_decoupled = seplerp_batch(dqA, dqB, t, eps)
+    
+    # 2. Extract components
+    xc, qc = dq_to_trans_rot(dq_coupled, eps)
+    xs, qs = dq_to_trans_rot(dq_decoupled, eps)
+    
+    # 3. Blend based on beta
+    if isinstance(beta, torch.Tensor) and beta.dim() == xc.dim() - 1:
+        beta_uns = beta.unsqueeze(-1)
+    else:
+        beta_uns = beta
+        
+    # Linear blend of translation
+    x_blend = (1 - beta_uns) * xs + beta_uns * xc
+    
+    # SLERP blend of rotation
+    # Note: Using your slerp function again. 
+    # Start=qs (decoupled), End=qc (coupled), T=beta.
+    # Signature: (t, q1, q0) where q0 is start.
+    q_blend = quaternion_slerp_exp(beta, q1=qc, q0=qs)
+    
+    return trans_rot_to_dq(x_blend, q_blend, eps)
