@@ -755,7 +755,7 @@ if __name__ == "__main__":
     type = args.type
 
     start_time = time.time()
-    clean_folder(inference_dir)
+    # clean_folder(inference_dir)
     file_generate(inference_dir, type=type)
     plot_time(inference_dir, type=type)
     designability_calculate(inference_dir)

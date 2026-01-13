@@ -474,7 +474,8 @@ class FlowModule(LightningModule):
 
             prot_traj, atom37_traj, model_traj, _ = interpolant.sample(
                 1, sample_length, self.model,
-                trans_1=trans_1, rotmats_1=rotmats_1, diffuse_mask=diffuse_mask
+                trans_1=trans_1, rotmats_1=rotmats_1, diffuse_mask=diffuse_mask,
+                record_traj=False,
             )
 
 
@@ -486,6 +487,14 @@ class FlowModule(LightningModule):
 
             bb_trajs = du.to_numpy(torch.stack(atom37_traj, dim=0).transpose(0, 1))
             bb_traj = bb_trajs[0]
+            bb5_traj = np.ascontiguousarray(bb_traj[:, :, :5, :])
+            traj_matrix = torch.from_numpy(
+                bb5_traj.reshape(bb5_traj.shape[0], -1)
+            )
+            torch.save(
+                traj_matrix,
+                os.path.join(sample_dir, 'traj.pt'),
+            )
 
             traj_paths = eu.save_traj(
                 bb_traj[-1],

@@ -628,7 +628,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run QFlow evaluation.")
     # Required arguments
     parser.add_argument("--inference_dir", required=True, help="Directory containing inference results.")
-    parser.add_argument("--script_path", default="/home/zichong_wang/ReQFlow/analysis/run_foldseek_batch.sh", help="Absolute Path to the FoldSeek script.")
+    parser.add_argument("--script_path", default="/home/zichong_wang/ReQFlow/analysis/run_foldseek_parallel.sh", help="Absolute Path to the FoldSeek script.")
     parser.add_argument("--dataset_dir", default="/home/zichong_wang/ReQFlow/foldseek/foldseek_db", help="Directory containing the FoldSeek dataset.")
 
     # Optional arguments with defaults
@@ -646,7 +646,7 @@ if __name__ == "__main__":
     type = args.type
 
     start_time = time.time()
-    clean_folder(inference_dir)
+    # clean_folder(inference_dir)
     file_generate(inference_dir, type=type)
     plot_time(inference_dir, type=type)
     designability_calculate(inference_dir)

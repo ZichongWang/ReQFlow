@@ -205,7 +205,9 @@ def quat_to_rot(quat: torch.Tensor) -> torch.Tensor:
     return torch.sum(quat, dim=(-3, -4))
 
 
-def rot_to_quat(rot: torch.Tensor) -> torch.Tensor:
+def rot_to_quat(
+    rot: torch.Tensor,
+):# -> Any:
     if(rot.shape[-2:] != (3, 3)):
         raise ValueError("Input rotation is incorrectly shaped")
 
@@ -247,6 +249,41 @@ _QUAT_MULTIPLY[:, :, 3] = [[ 0, 0, 0, 1],
                           [ 1, 0, 0, 0]]
 
 _QUAT_MULTIPLY_BY_VEC = _QUAT_MULTIPLY[:, 1:, :]
+
+
+def quat_multiply(quat1, quat2):
+    """Multiply a quaternion by another quaternion."""
+    mat = quat1.new_tensor(_QUAT_MULTIPLY)
+    reshaped_mat = mat.view((1,) * len(quat1.shape[:-1]) + mat.shape)
+    return torch.sum(
+        reshaped_mat *
+        quat1[..., :, None, None] *
+        quat2[..., None, :, None],
+        dim=(-3, -2)
+      )
+
+
+def quat_multiply_by_vec(quat, vec):
+    """Multiply a quaternion by a pure-vector quaternion."""
+    mat = quat.new_tensor(_QUAT_MULTIPLY_BY_VEC)
+    reshaped_mat = mat.view((1,) * len(quat.shape[:-1]) + mat.shape)
+    return torch.sum(
+        reshaped_mat *
+        quat[..., :, None, None] *
+        vec[..., None, :, None],
+        dim=(-3, -2)
+    )
+
+
+def invert_rot_mat(rot_mat: torch.Tensor):
+    return rot_mat.transpose(-1, -2)
+
+
+def invert_quat(quat: torch.Tensor):
+    quat_prime = quat.clone()
+    quat_prime[..., 1:] *= -1
+    inv = quat_prime / torch.sum(quat ** 2, dim=-1, keepdim=True)
+    return inv
 
 
 class Rotation:

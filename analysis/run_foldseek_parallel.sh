@@ -95,7 +95,7 @@ export -f process_pdb
 export output_dir database tmp_result_dir designable_list
 
 CPU_CORES=$(nproc)
-JOBS=$((CPU_CORES * 5 / 10))
+JOBS=$((CPU_CORES * 3 / 10))
 # Using 50% of the CPU cores for parallel processing
 parallel --jobs "$JOBS" process_pdb {} "$output_dir" "$database" "$tmp_result_dir" "$designable_list" :::: "$pdb_list"
 

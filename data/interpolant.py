@@ -8,7 +8,7 @@ import copy
 from torch import autograd
 from motif_scaffolding import twisting
 
-from openfold.utils.rigid_utils import rot_to_quat
+from openfold.utils.rigid_utils import rot_to_quat, quat_to_rot
 
 def _centered_gaussian(num_batch, num_res, device):
     noise = torch.randn(num_batch, num_res, 3, device=device)
@@ -257,10 +257,41 @@ class Interpolant:
             chain_idx=None,
             res_idx=None,
             verbose=False,
+            record_traj: bool = False,
+            noise_pdb_path=None,
         ):
         res_mask = torch.ones(num_batch, num_res, device=self._device)
-
+        # noise_pdb_path = "/home/zichong_wang/ReQFlow/inference_outputs/ckpts/reqflow_pdb_rectify/reqflow_pdb_rectify/unconditional/path_analyze/noise.pdb"
         # Set-up initial prior samples
+        if noise_pdb_path is not None:
+            if (trans_0 is None) != (rotmats_0 is None):
+                raise ValueError('noise_pdb_path requires both trans_0 and rotmats_0 to be None')
+            if trans_0 is None and rotmats_0 is None:
+                from openfold.data import data_transforms
+                from openfold.utils import rigid_utils
+
+                noise_feats = du.parse_pdb_feats('noise', noise_pdb_path)
+                chain_feats = {
+                    'aatype': torch.tensor(noise_feats['aatype']).long(),
+                    'all_atom_positions': torch.tensor(noise_feats['atom_positions']).float(),
+                    'all_atom_mask': torch.tensor(noise_feats['atom_mask']).float(),
+                }
+                chain_feats = data_transforms.atom37_to_frames(chain_feats)
+                rigids_0 = rigid_utils.Rigid.from_tensor_4x4(
+                    chain_feats['rigidgroups_gt_frames']
+                )[:, 0]
+                trans_0 = rigids_0.get_trans().float()
+                rotmats_0 = rigids_0.get_rots().get_rot_mats().float()
+                rotquats_0 = rigids_0.get_rots().get_quats().float()
+                if trans_0.shape[0] != num_res:
+                    raise ValueError(
+                        f'noise_pdb_path length {trans_0.shape[0]} != num_res {num_res}'
+                    )
+                trans_0 = trans_0[None].repeat(num_batch, 1, 1).to(self._device)
+                rotmats_0 = rotmats_0[None].repeat(num_batch, 1, 1, 1).to(self._device)
+                rotquats_0 = rotquats_0[None].repeat(num_batch, 1, 1).to(self._device)
+                print("using noise pdb for prior initialization")
+
         if trans_0 is None:
             trans_0 = _centered_gaussian(
                 num_batch, num_res, self._device) * du.NM_TO_ANG_SCALE  # torch.Tensor(batch, res, 3)
@@ -334,6 +365,9 @@ class Interpolant:
         prot_traj_quats = [(trans_0, rotquats_0)]
         clean_traj = []
         clean_traj_quats = []
+
+        num_loop_steps = len(ts) - 1
+
         for i, t_2 in enumerate(ts[1:]):
             if verbose: # and i % 1 == 0:
                 print(f'{i=}, t={t_1.item():.2f}')
@@ -387,9 +421,52 @@ class Interpolant:
                     batch['trans_sc'] = pred_trans_1
 
             # Take reverse step
-            
-            trans_t_2 = self._trans_euler_step(
-                d_t, t_1, pred_trans_1, trans_t_1)
+            is_last_step = (i == num_loop_steps - 1)
+            do_overshoot = getattr(self._sample_cfg, 'overshoot', False) and (not is_last_step)
+
+            if do_overshoot:
+                overshoot_scale = 2.0
+                dt_over = overshoot_scale * d_t
+
+                trans_over = self._trans_euler_step(dt_over, t_1, pred_trans_1, trans_t_1)
+                rotquats_over = self._rots_quats_euler_step(dt_over, t_1, pred_rotquats_1, rotquats_t_1)
+
+                dq_curr = so3_utils.trans_rot_to_dq(trans_t_1, rotquats_t_1)
+                dq_over = so3_utils.trans_rot_to_dq(trans_over, rotquats_over)
+
+                backtrack_ratio = 1.0 / overshoot_scale
+                diversity_sigma = 0.0 # 可以根据需要调整或放入 config
+                noise = torch.randn(num_batch, 1, device=self._device) * diversity_sigma
+                lambda_t = torch.clamp(backtrack_ratio + noise, 0.05, 0.95)
+
+                strategy = getattr(self._sample_cfg, 'overshoot_strategy', 'DLB')
+                # print(f"Using overshoot, method {strategy}")
+
+                if strategy == 'KenLERP':
+                    # KenLERP 混合解耦路径(Euler)和耦合路径(ScLERP/DLB)
+                    # 这里的 "解耦路径" 即 Linear(Curr, Over, 0.5)，等效于 Euler 步
+                    # 这里的 "耦合路径" 即 ScLERP(Curr, Over, 0.5)
+                    # so3_utils.kenlerp_batch 内部完成了这两条路径的计算和混合
+                    beta = getattr(self._sample_cfg, 'KenLERP_beta', 0.5)
+                    dq_next = so3_utils.kenlerp_batch(dq_curr, dq_over, lambda_t, beta)
+                    
+                elif strategy == 'ScLERP':
+                    # 严格的螺旋插值
+                    dq_next = so3_utils.sclerp_batch(dq_curr, dq_over, lambda_t)
+                    
+                else: # Default to 'DLB'
+                    # 快速近似螺旋插值
+                    dq_next = so3_utils.dlb_batch(dq_curr, dq_over, lambda_t)
+
+                trans_t_2, rotquats_t_2 = so3_utils.dq_to_trans_rot(dq_next)
+
+            else:
+                # --- Standard Euler Step (Last Step or Config Off) ---
+                # 仅在不进行 Overshoot 时计算，避免冗余计算
+                trans_t_2 = self._trans_euler_step(d_t, t_1, pred_trans_1, trans_t_1)
+                rotquats_t_2 = self._rots_quats_euler_step(d_t, t_1, pred_rotquats_1, rotquats_t_1)
+
+
             if trans_potential is not None:
                 with torch.inference_mode(False):
                     grad_pred_trans_1 = pred_trans_1.clone().detach().requires_grad_(True)
@@ -398,13 +475,14 @@ class Interpolant:
                     trans_t_2 -= t_1 / (1 - t_1) * pred_trans_potential * d_t
                 else:
                     trans_t_2 -= pred_trans_potential * d_t
-            rotquats_t_2 = self._rots_quats_euler_step(
-                d_t, t_1, pred_rotquats_1, rotquats_t_1)
+            
             if motif_scaffolding and not self._cfg.twisting.use:
                 trans_t_2 = _trans_diffuse_mask(trans_t_2, trans_1, diffuse_mask)
                 rotquats_t_2 = _rots_quats_diffuse_mask(rotquats_t_2, rotquats_1, diffuse_mask)
 
             prot_traj_quats.append((trans_t_2, rotquats_t_2))
+            if record_traj:
+                prot_traj.append((trans_t_2, quat_to_rot(rotquats_t_2)))
             t_1 = t_2
 
         # We only integrated to min_t, so need to make a final step

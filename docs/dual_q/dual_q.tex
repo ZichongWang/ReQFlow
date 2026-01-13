@@ -221,25 +221,23 @@ Finally, $\hat{\bm{q}}_{t+\Delta t}$ is converted back to $(\bm{x}_{t+\Delta t},
 \caption{Overshoot-Backtrack Inference with Generic Interpolation}
 \label{alg:overshoot_generic}
 \begin{algorithmic}[1]
-\REQUIRE Model $\mathcal{M}_\theta$, noise $T_0$, steps $L$, accel. $\gamma$, strategy $\in \{\text{DLB}, \text{ScLERP}\}$.
+\REQUIRE Model $\mathcal{M}_\theta$, noise $T_0$, steps $L$, accel. $\gamma$, strategy $\in \{\text{DLB}, \text{ScLERP}, \text{KenLERP}\}$.
 \STATE Initialize $t = 0, \Delta t = \frac{1}{L}$.
 \FOR{step $= 1$ to $L$}
     \STATE \textit{// 1. Decoupled Overshoot (Predictor)}
     \STATE Predict $\bm{v}_{\theta,t}, \bm{\omega}_{\theta,t}$ from $\mathcal{M}_\theta(T_t, t)$.
     \STATE $\bm{x}_{\text{over}} \leftarrow \bm{x}_t + \bm{v}_{\theta,t} \cdot (2\Delta t)$
-    \STATE $\bm{q}_{\text{over}} \leftarrow \bm{q}_t \otimes \exp\left(\Delta t \cdot \gamma e^{-\gamma t} \bm{\omega}_{\theta,t}\right)$
+    \STATE $\bm{q}_{\text{over}} \leftarrow \bm{q}_t \otimes \exp\left(2\Delta t \cdot \gamma e^{-\gamma t} \bm{\omega}_{\theta,t}\right)$
     
     \STATE \textit{// 2. Coupled Backtrack (Corrector)}
     \STATE $\hat{\bm{q}}_t \leftarrow \text{ToDual}(\bm{x}_t, \bm{q}_t)$
     \STATE $\hat{\bm{q}}_{\text{over}} \leftarrow \text{ToDual}(\bm{x}_{\text{over}}, \bm{q}_{\text{over}})$
     
-    \STATE Sample $\lambda \sim \mathcal{N}(0.5, \sigma^2)$ \COMMENT{Stochastic diversity}
-    
-    \IF{strategy == DLB}
-        \STATE $\hat{\bm{q}}_{\text{next}} \leftarrow \text{DLB}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}, \lambda)$
-    \ELSIF{strategy == ScLERP}
-        \STATE $\hat{\bm{q}}_{\text{next}} \leftarrow \text{ScLERP}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}, \lambda)$
-    \ENDIF
+    % \STATE Sample $\lambda \sim \mathcal{N}(0.5, \sigma^2)$ \COMMENT{Stochastic diversity}
+    \STATE set $\lambda=0.5$
+
+    \STATE $\hat{\bm{q}}_{\text{next}} \leftarrow \text{strategy}(\hat{\bm{q}}_t, \hat{\bm{q}}_{\text{over}}, \lambda)$
+
     
     \STATE $\bm{x}_{t+\Delta t}, \bm{q}_{t+\Delta t} \leftarrow \text{FromDual}(\hat{\bm{q}}_{\text{next}})$
     \STATE $t \leftarrow t + \Delta t$

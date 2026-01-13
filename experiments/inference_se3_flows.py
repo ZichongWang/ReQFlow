@@ -1,7 +1,7 @@
 """Script for running inference and evaluation."""
 
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 import time
 import numpy as np
 import hydra
@@ -84,7 +84,9 @@ class EvalRunner:
     def run_sampling(self):
         # devices = GPUtil.getAvailable(
         #     order='memory', limit = 8)[:self._infer_cfg.num_gpus]
-        devices = [0,1,2,3,4,5,6,7]
+        # devices = [0,1,2,3,4,5,6,7]
+        devices = [0,1]
+        # devices = [0]
         num_gpus = self._infer_cfg.num_gpus
         log.info(f"Using devices: {devices}")
         log.info(f'Evaluating {self._infer_cfg.task}')
